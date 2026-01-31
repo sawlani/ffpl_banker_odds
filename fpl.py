@@ -84,8 +84,7 @@ def get_master_stats(player_names, is_home=True):
             # 4. Venue & Penalties
             venue_adj = 0.04 if is_home else -0.02
             # Check if player is a penalty taker from API data
-            is_taker = ((p.get('penalties_order') is not None and p.get('penalties_order', 0) > 0) or
-                       p.get('penalties_scored', 0) > 0)
+            is_taker = p.get('penalties_order') == 1
             penalty = 0.035 if is_taker else 0
             
             # 5. Conversion (Goals vs xG)
@@ -98,36 +97,71 @@ def get_master_stats(player_names, is_home=True):
         # --- ODDS CALCULATION ---
         decimal_odds = round(1 / final_prob, 2) if final_prob > 0 else 99.0
 
+        # Get opponent name if available
+        opponent_name = opponent.get('name', 'Unknown') if 'opponent' in locals() else 'Unknown'
+        is_home_match = next_fix['is_home'] if 'next_fix' in locals() and next_fix else None
+        
         results.append({
-            "Player": p['web_name'],
-            "Base": round(xg_per_app * 0.65, 3),
-            "Threat": round(threat_adj, 3) if 'threat_adj' in locals() else 0,
-            "Form": round(form_adj, 3) if 'form_adj' in locals() else 0,
-            "Opp": round(opponent_adj, 3) if 'opponent_adj' in locals() else 0,
-            "Avail": avail_multiplier,
-            "Prob": f"{final_prob:.1%}",
-            "ODDS": f"{decimal_odds:.2f}"
+            # Player identification
+            "player_id": p['id'],
+            "player_name": p['web_name'],
+            "full_name": f"{p['first_name']} {p['second_name']}",
+            "team": teams_data[p['team']]['name'],
+            "position": ['GKP', 'DEF', 'MID', 'FWD'][p['element_type'] - 1],
+            
+            # Match context
+            "next_opponent": opponent_name,
+            "is_home": is_home_match,
+            
+            # Raw stats
+            "total_minutes": total_mins,
+            "appearances": apps,
+            "avg_minutes_per_app": round(avg_mins_per_app, 1),
+            "goals_scored": p['goals_scored'],
+            "expected_goals": float(p['expected_goals']),
+            "expected_goals_per_90": float(p['expected_goals_per_90']),
+            "xg_per_app": round(xg_per_app, 3),
+            "form": float(p['form']),
+            "threat": float(p['threat']),
+            "penalties_order": p.get('penalties_order'),
+            "penalties_scored": p.get('penalties_scored', 0),
+            "is_penalty_taker": is_taker if 'is_taker' in locals() else False,
+            
+            # Odds components
+            "base_prob": round(xg_per_app * 0.65, 3),
+            "threat_adj": round(threat_adj, 3) if 'threat_adj' in locals() else 0,
+            "form_adj": round(form_adj, 3) if 'form_adj' in locals() else 0,
+            "opponent_adj": round(opponent_adj, 3) if 'opponent_adj' in locals() else 0,
+            "venue_adj": round(venue_adj, 3) if 'venue_adj' in locals() else 0,
+            "penalty_adj": round(penalty, 3) if 'penalty' in locals() else 0,
+            "conversion_adj": round(conversion_adj, 3) if 'conversion_adj' in locals() else 0,
+            "raw_prob_before_avail": round(raw_prob, 3) if 'raw_prob' in locals() else final_prob,
+            "availability_multiplier": avail_multiplier,
+            "chance_of_playing": chance if 'chance' in locals() else None,
+            
+            # Final results
+            "final_probability": round(final_prob, 4),
+            "probability_pct": f"{final_prob:.1%}",
+            "decimal_odds": decimal_odds
         })
         # Respect API rate limits
         time.sleep(0.05)
 
     return results
 
-# Sanity check list (40+ players)
-players = [
-    "Haaland", "Salah", "Saka", "Palmer", "Son", "Watkins", "Isak", "Wood", "Jackson", 
-    "Solanke", "Mbeumo", "Havertz", "Diaz", "Gakpo", "Bowen", "Gordon", "Fernandes", 
-    "Rashford", "Garnacho", "Johnson", "Kulusevski", "Cunha", "Larsen", "Wissa", 
-    "Delap", "Raul", "Savio", "Foden", "Martinelli", "Eze", "Rogers", "Semenyo", 
-    "Evanilson", "Welbeck", "Pedro", "Chiesa", "Delap", "Jota", "Raya", "Pickford", 
-    "White", "Saliba", "Guiu", "Jesus", "Thiago"
-]
+if __name__ == "__main__":
+    # Sanity check list (40+ players)
+    players = [
+        "Haaland", "Salah", "Saka", "Palmer", "Son", "Watkins", "Isak", "Wood", "Jackson", 
+        "Evanilson", "Welbeck", "Pedro", "Chiesa", "Delap", "Jota", "Raya", "Pickford", 
+        "White", "Saliba", "Guiu", "Jesus", "Thiago"
+    ]
 
-data = get_master_stats(players)
+    data = get_master_stats(players)
 
-# Display Results
-header = f"{'Player':<14} | {'Base':<6} | {'Threat':<7} | {'Form':<7} | {'Opp':<7} | {'Avail':<6} | {'Prob':<7} | {'ODDS'}"
-print(header)
-print("-" * len(header))
-for d in sorted(data, key=lambda x: float(x['ODDS'])):
-    print(f"{d['Player']:<14} | {d['Base']:<6} | {d['Threat']:<7} | {d['Form']:<7} | {d['Opp']:<7} | {d['Avail']:<6} | {d['Prob']:<7} | {d['ODDS']}")
+    # Display Results
+    header = f"{'Player':<14} | {'Base':<6} | {'Threat':<7} | {'Form':<7} | {'Opp':<7} | {'Avail':<6} | {'Prob':<7} | {'ODDS'}"
+    print(header)
+    print("-" * len(header))
+    for d in sorted(data, key=lambda x: float(x['decimal_odds'])):
+        print(f"{d['player_name']:<14} | {d['base_prob']:<6} | {d['threat_adj']:<7} | {d['form_adj']:<7} | {d['opponent_adj']:<7} | {d['availability_multiplier']:<6} | {d['probability_pct']:<7} | {d['decimal_odds']:.2f}")

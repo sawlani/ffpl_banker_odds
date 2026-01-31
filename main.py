@@ -62,7 +62,7 @@ def compute_odds_for_all_players(is_home=True, output_file='player_odds.json', b
             continue
     
     # Sort results by odds (ascending - best odds first)
-    all_results.sort(key=lambda x: float(x['ODDS']))
+    all_results.sort(key=lambda x: float(x['decimal_odds']))
     
     # Add metadata and save
     output_data = {
@@ -98,8 +98,8 @@ def display_top_odds(results, n=20):
     print("-" * len(header))
     
     for idx, d in enumerate(results[:n], 1):
-        print(f"{idx:<6} | {d['Player']:<14} | {d['Base']:<6} | {d['Form']:<7} | "
-              f"{d['Opp']:<7} | {d['Prob']:<7} | {d['ODDS']}")
+        print(f"{idx:<6} | {d['player_name']:<14} | {d['base_prob']:<6} | {d['form_adj']:<7} | "
+              f"{d['opponent_adj']:<7} | {d['probability_pct']:<7} | {d['decimal_odds']:.2f}")
 
 def display_summary_stats(results):
     """Display summary statistics about the odds."""
@@ -108,14 +108,14 @@ def display_summary_stats(results):
     print(f"{'='*80}")
     
     # Parse probabilities
-    probs = [float(r['Prob'].rstrip('%')) / 100 for r in results]
-    odds = [float(r['ODDS']) for r in results]
+    probs = [d['final_probability'] for d in results]
+    odds = [float(d['decimal_odds']) for d in results]
     
     print(f"Total players analyzed: {len(results)}")
     print(f"\nProbability to score:")
     print(f"  Average: {sum(probs)/len(probs)*100:.2f}%")
     print(f"  Median: {sorted(probs)[len(probs)//2]*100:.2f}%")
-    print(f"  Max: {max(probs)*100:.2f}% ({[r['Player'] for r in results if float(r['Prob'].rstrip('%'))/100 == max(probs)][0]})")
+    print(f"  Max: {max(probs)*100:.2f}% ({[r['player_name'] for r in results if r['final_probability'] == max(probs)][0]})")
     print(f"  Min: {min(probs)*100:.2f}%")
     
     print(f"\nDecimal Odds:")
