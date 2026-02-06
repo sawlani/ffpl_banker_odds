@@ -56,6 +56,16 @@ def get_master_stats(player_names, is_home=True):
         
         # --- CALCULATE COMPONENTS ---
         
+        # Get fixture data early (needed for all calculations)
+        next_fix = summary['fixtures'][0] if summary['fixtures'] else None
+        if not next_fix:
+            continue  # Skip if no fixture found
+
+        # Use the actual fixture data to determine if player is home (not the parameter)
+        player_is_home = next_fix['is_home']
+        opp_id = next_fix['team_a'] if player_is_home else next_fix['team_h']
+        opponent = teams_data[opp_id]
+
         # Availability Check (for all cases)
         chance = p['chance_of_playing_next_round']
         avail_multiplier = 1 if (chance is None or chance > 0) else 0
@@ -75,14 +85,11 @@ def get_master_stats(player_names, is_home=True):
             form_adj = (float(p['form']) / avg_form - 1) * 0.06
             
             # 3. Opponent Adjustment
-            next_fix = summary['fixtures'][0] if summary['fixtures'] else None
-            opp_id = next_fix['team_a'] if next_fix['is_home'] else next_fix['team_h'] if next_fix else 1
-            opponent = teams_data[opp_id]
-            opp_def_raw = opponent['strength_defence_home'] if is_home else opponent['strength_defence_away']
+            opp_def_raw = opponent['strength_defence_home'] if player_is_home else opponent['strength_defence_away']
             opponent_adj = (league_avg_def - opp_def_raw) / league_avg_def * 0.15 
             
             # 4. Venue & Penalties
-            venue_adj = 0.04 if is_home else -0.02
+            venue_adj = 0.04 if player_is_home else -0.02
             # Check if player is a penalty taker from API data
             is_taker = p.get('penalties_order') == 1
             penalty = 0.035 if is_taker else 0
@@ -99,7 +106,7 @@ def get_master_stats(player_names, is_home=True):
 
         # Get opponent name if available
         opponent_name = opponent.get('name', 'Unknown') if 'opponent' in locals() else 'Unknown'
-        is_home_match = next_fix['is_home'] if 'next_fix' in locals() and next_fix else None
+        is_home_match = player_is_home
         
         results.append({
             # Player identification
