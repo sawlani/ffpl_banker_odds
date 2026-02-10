@@ -1,6 +1,72 @@
 import requests
 import time
 
+def calculate_single_fixture_prob(p, fixture, teams_data, avg_form, league_avg_def, total_mins, xg_per_app, avail_multiplier):
+    """
+    Calculate the probability of a player scoring in a single fixture.
+    Returns the probability and all component adjustments.
+    """
+    player_is_home = fixture['is_home']
+    opp_id = fixture['team_a'] if player_is_home else fixture['team_h']
+    opponent = teams_data[opp_id]
+    
+    # Position check: GKPs and standard defenders get baseline low prob
+    if p['element_type'] == 1:  # GKP
+        return 0.01, {
+            'base_prob': 0,
+            'threat_adj': 0,
+            'form_adj': 0,
+            'opponent_adj': 0,
+            'venue_adj': 0,
+            'penalty_adj': 0,
+            'conversion_adj': 0
+        }
+    elif total_mins < 90:  # Low data sample
+        return 0.05, {
+            'base_prob': 0,
+            'threat_adj': 0,
+            'form_adj': 0,
+            'opponent_adj': 0,
+            'venue_adj': 0,
+            'penalty_adj': 0,
+            'conversion_adj': 0
+        }
+    else:
+        # 1. Base from xG/App
+        base = xg_per_app * 0.65
+        
+        # 2. Threat & Form (normalized to league average)
+        threat_adj = 0
+        form_adj = (float(p['form']) / avg_form - 1) * 0.06
+        
+        # 3. Opponent Adjustment
+        opp_def_raw = opponent['strength_defence_home'] if player_is_home else opponent['strength_defence_away']
+        opponent_adj = (league_avg_def - opp_def_raw) / league_avg_def * 0.15
+        
+        # 4. Venue & Penalties
+        venue_adj = 0.04 if player_is_home else -0.02
+        # Check if player is a penalty taker from API data
+        is_taker = p.get('penalties_order') == 1
+        penalty = 0.035 if is_taker else 0
+        
+        # 5. Conversion (Goals vs xG)
+        exp_goals = float(p['expected_goals'])
+        conversion_adj = ((p['goals_scored'] / exp_goals - 1) * 0.03) if exp_goals > 0 else 0
+        
+        raw_prob = (base + threat_adj + form_adj + opponent_adj + venue_adj + penalty + conversion_adj)
+        final_prob = max(0.05, min(raw_prob * avail_multiplier, 0.75))
+        
+        return final_prob, {
+            'base_prob': base,
+            'threat_adj': threat_adj,
+            'form_adj': form_adj,
+            'opponent_adj': opponent_adj,
+            'venue_adj': venue_adj,
+            'penalty_adj': penalty,
+            'conversion_adj': conversion_adj,
+            'raw_prob': raw_prob
+        }
+
 def get_master_stats(player_names, is_home=True):
     base_url = "https://fantasy.premierleague.com/api/"
     response = requests.get(f"{base_url}bootstrap-static/")
@@ -56,57 +122,84 @@ def get_master_stats(player_names, is_home=True):
         
         # --- CALCULATE COMPONENTS ---
         
-        # Get fixture data early (needed for all calculations)
-        next_fix = summary['fixtures'][0] if summary['fixtures'] else None
-        if not next_fix:
-            continue  # Skip if no fixture found
-
-        # Use the actual fixture data to determine if player is home (not the parameter)
-        player_is_home = next_fix['is_home']
-        opp_id = next_fix['team_a'] if player_is_home else next_fix['team_h']
-        opponent = teams_data[opp_id]
-
+        # Get fixture data - check for double gameweek
+        all_fixtures = summary.get('fixtures', [])
+        if not all_fixtures:
+            continue  # Skip if no fixtures found
+        
+        # Filter for upcoming fixtures (those with an event number)
+        upcoming_fixtures = [f for f in all_fixtures if f.get('event') is not None]
+        if not upcoming_fixtures:
+            continue  # Skip if no upcoming fixtures
+        
+        # Check for double gameweek (multiple fixtures in the same gameweek)
+        next_gw = upcoming_fixtures[0].get('event')
+        fixtures_in_next_gw = [f for f in upcoming_fixtures if f.get('event') == next_gw]
+        is_double_gw = len(fixtures_in_next_gw) > 1
+        
         # Availability Check (for all cases)
         chance = p['chance_of_playing_next_round']
         avail_multiplier = 1 if (chance is None or chance > 0) else 0
         
-        # Position check: GKPs and standard defenders get baseline low prob
-        if p['element_type'] == 1: # GKP
-            final_prob = 0.01
-        elif total_mins < 90: # Low data sample
-            final_prob = 0.05
+        # Calculate probabilities for each fixture in the gameweek
+        fixture_probs = []
+        fixture_details = []
+        
+        for fixture in fixtures_in_next_gw:
+            prob, components = calculate_single_fixture_prob(
+                p, fixture, teams_data, avg_form, league_avg_def, 
+                total_mins, xg_per_app, avail_multiplier
+            )
+            fixture_probs.append(prob)
+            
+            # Store fixture details
+            player_is_home = fixture['is_home']
+            opp_id = fixture['team_a'] if player_is_home else fixture['team_h']
+            opponent = teams_data[opp_id]
+            fixture_details.append({
+                'opponent': opponent.get('name', 'Unknown'),
+                'is_home': player_is_home,
+                'components': components
+            })
+        
+        # Add probabilities together for DGW (as requested)
+        final_prob = sum(fixture_probs)
+        # Cap at reasonable maximum (e.g., 0.90 for very high combined probability)
+        final_prob = min(final_prob, 0.90)
+        
+        # Use first fixture for display purposes
+        first_fixture = fixtures_in_next_gw[0]
+        player_is_home = first_fixture['is_home']
+        opp_id = first_fixture['team_a'] if player_is_home else first_fixture['team_h']
+        opponent = teams_data[opp_id]
+        opponent_name = opponent.get('name', 'Unknown')
+        is_home_match = player_is_home
+        
+        # Get components from first fixture for display (or average if DGW)
+        if is_double_gw:
+            # Average components across both fixtures for display
+            avg_components = {
+                'base_prob': sum(d['components']['base_prob'] for d in fixture_details) / len(fixture_details),
+                'threat_adj': sum(d['components']['threat_adj'] for d in fixture_details) / len(fixture_details),
+                'form_adj': sum(d['components']['form_adj'] for d in fixture_details) / len(fixture_details),
+                'opponent_adj': sum(d['components']['opponent_adj'] for d in fixture_details) / len(fixture_details),
+                'venue_adj': sum(d['components']['venue_adj'] for d in fixture_details) / len(fixture_details),
+                'penalty_adj': sum(d['components']['penalty_adj'] for d in fixture_details) / len(fixture_details),
+                'conversion_adj': sum(d['components']['conversion_adj'] for d in fixture_details) / len(fixture_details),
+                'raw_prob': sum(d['components'].get('raw_prob', 0) for d in fixture_details) / len(fixture_details)
+            }
         else:
-            # 1. Base from xG/App
-            base = xg_per_app * 0.65
-            
-            # 2. Threat & Form (normalized to league average)
-            #threat_adj = (float(p['threat']) / avg_threat - 1) * 0.08
-            threat_adj = 0
-            form_adj = (float(p['form']) / avg_form - 1) * 0.06
-            
-            # 3. Opponent Adjustment
-            opp_def_raw = opponent['strength_defence_home'] if player_is_home else opponent['strength_defence_away']
-            opponent_adj = (league_avg_def - opp_def_raw) / league_avg_def * 0.15 
-            
-            # 4. Venue & Penalties
-            venue_adj = 0.04 if player_is_home else -0.02
-            # Check if player is a penalty taker from API data
-            is_taker = p.get('penalties_order') == 1
-            penalty = 0.035 if is_taker else 0
-            
-            # 5. Conversion (Goals vs xG)
-            exp_goals = float(p['expected_goals'])
-            conversion_adj = ((p['goals_scored'] / exp_goals - 1) * 0.03) if exp_goals > 0 else 0
-            
-            raw_prob = (base + threat_adj + form_adj + opponent_adj + venue_adj + penalty + conversion_adj)
-            final_prob = max(0.05, min(raw_prob * avail_multiplier, 0.75))
+            avg_components = fixture_details[0]['components']
+        
+        # Check if player is a penalty taker
+        is_taker = p.get('penalties_order') == 1
 
         # --- ODDS CALCULATION ---
         decimal_odds = round(1 / final_prob, 2) if final_prob > 0 else 99.0
-
-        # Get opponent name if available
-        opponent_name = opponent.get('name', 'Unknown') if 'opponent' in locals() else 'Unknown'
-        is_home_match = player_is_home
+        
+        # Build opponents list for DGW
+        opponents_list = [d['opponent'] for d in fixture_details]
+        opponents_display = " & ".join(opponents_list) if is_double_gw else opponent_name
         
         results.append({
             # Player identification
@@ -117,8 +210,12 @@ def get_master_stats(player_names, is_home=True):
             "position": ['GKP', 'DEF', 'MID', 'FWD'][p['element_type'] - 1],
             
             # Match context
-            "next_opponent": opponent_name,
+            "next_opponent": opponents_display,
             "is_home": is_home_match,
+            "is_double_gw": is_double_gw,
+            "gameweek": next_gw,
+            "num_fixtures": len(fixtures_in_next_gw),
+            "opponents": opponents_list,
             
             # Raw stats
             "total_minutes": total_mins,
@@ -132,19 +229,22 @@ def get_master_stats(player_names, is_home=True):
             "threat": float(p['threat']),
             "penalties_order": p.get('penalties_order'),
             "penalties_scored": p.get('penalties_scored', 0),
-            "is_penalty_taker": is_taker if 'is_taker' in locals() else False,
+            "is_penalty_taker": is_taker,
             
-            # Odds components
-            "base_prob": round(xg_per_app * 0.65, 3),
-            "threat_adj": round(threat_adj, 3) if 'threat_adj' in locals() else 0,
-            "form_adj": round(form_adj, 3) if 'form_adj' in locals() else 0,
-            "opponent_adj": round(opponent_adj, 3) if 'opponent_adj' in locals() else 0,
-            "venue_adj": round(venue_adj, 3) if 'venue_adj' in locals() else 0,
-            "penalty_adj": round(penalty, 3) if 'penalty' in locals() else 0,
-            "conversion_adj": round(conversion_adj, 3) if 'conversion_adj' in locals() else 0,
-            "raw_prob_before_avail": round(raw_prob, 3) if 'raw_prob' in locals() else final_prob,
+            # Odds components (averaged for DGW)
+            "base_prob": round(avg_components['base_prob'], 3),
+            "threat_adj": round(avg_components['threat_adj'], 3),
+            "form_adj": round(avg_components['form_adj'], 3),
+            "opponent_adj": round(avg_components['opponent_adj'], 3),
+            "venue_adj": round(avg_components['venue_adj'], 3),
+            "penalty_adj": round(avg_components['penalty_adj'], 3),
+            "conversion_adj": round(avg_components['conversion_adj'], 3),
+            "raw_prob_before_avail": round(avg_components.get('raw_prob', 0), 3),
             "availability_multiplier": avail_multiplier,
-            "chance_of_playing": chance if 'chance' in locals() else None,
+            "chance_of_playing": chance,
+            
+            # Individual fixture probabilities (for DGW)
+            "fixture_probabilities": [round(prob, 4) for prob in fixture_probs] if is_double_gw else None,
             
             # Final results
             "final_probability": round(final_prob, 4),
@@ -167,8 +267,9 @@ if __name__ == "__main__":
     data = get_master_stats(players)
 
     # Display Results
-    header = f"{'Player':<14} | {'Base':<6} | {'Threat':<7} | {'Form':<7} | {'Opp':<7} | {'Avail':<6} | {'Prob':<7} | {'ODDS'}"
+    header = f"{'Player':<14} | {'Base':<6} | {'Threat':<7} | {'Form':<7} | {'Opp':<7} | {'Avail':<6} | {'Prob':<7} | {'ODDS':<6} | {'DGW'}"
     print(header)
     print("-" * len(header))
     for d in sorted(data, key=lambda x: float(x['decimal_odds'])):
-        print(f"{d['player_name']:<14} | {d['base_prob']:<6} | {d['threat_adj']:<7} | {d['form_adj']:<7} | {d['opponent_adj']:<7} | {d['availability_multiplier']:<6} | {d['probability_pct']:<7} | {d['decimal_odds']:.2f}")
+        dgw_indicator = f"GW{d['gameweek']} (2)" if d.get('is_double_gw', False) else ""
+        print(f"{d['player_name']:<14} | {d['base_prob']:<6} | {d['threat_adj']:<7} | {d['form_adj']:<7} | {d['opponent_adj']:<7} | {d['availability_multiplier']:<6} | {d['probability_pct']:<7} | {d['decimal_odds']:.2f} | {dgw_indicator}")

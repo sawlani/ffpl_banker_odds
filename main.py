@@ -93,13 +93,14 @@ def display_top_odds(results, n=20):
     print(f"TOP {n} PLAYERS - BEST ODDS TO SCORE")
     print(f"{'='*100}\n")
     
-    header = f"{'Rank':<6} | {'Player':<14} | {'Base':<6} | {'Form':<7} | {'Opp':<7} | {'Prob':<7} | {'ODDS'}"
+    header = f"{'Rank':<6} | {'Player':<14} | {'Base':<6} | {'Form':<7} | {'Opp':<7} | {'Prob':<7} | {'ODDS':<6} | {'DGW'}"
     print(header)
     print("-" * len(header))
     
     for idx, d in enumerate(results[:n], 1):
+        dgw_indicator = f"GW{d['gameweek']} (2)" if d.get('is_double_gw', False) else ""
         print(f"{idx:<6} | {d['player_name']:<14} | {d['base_prob']:<6} | {d['form_adj']:<7} | "
-              f"{d['opponent_adj']:<7} | {d['probability_pct']:<7} | {d['decimal_odds']:.2f}")
+              f"{d['opponent_adj']:<7} | {d['probability_pct']:<7} | {d['decimal_odds']:.2f} | {dgw_indicator}")
 
 def display_summary_stats(results):
     """Display summary statistics about the odds."""
