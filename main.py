@@ -99,8 +99,9 @@ def display_top_odds(results, n=20):
     
     for idx, d in enumerate(results[:n], 1):
         dgw_indicator = f"GW{d['gameweek']} (2)" if d.get('is_double_gw', False) else ""
+        opponent_adj_display = d['opponent_adj'] if d['opponent_adj'] is not None else "DGW"
         print(f"{idx:<6} | {d['player_name']:<14} | {d['base_prob']:<6} | {d['form_adj']:<7} | "
-              f"{d['opponent_adj']:<7} | {d['probability_pct']:<7} | {d['decimal_odds']:.2f} | {dgw_indicator}")
+              f"{opponent_adj_display:<7} | {d['probability_pct']:<7} | {d['decimal_odds']:.2f} | {dgw_indicator}")
 
 def display_summary_stats(results):
     """Display summary statistics about the odds."""
